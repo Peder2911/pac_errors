@@ -14,3 +14,4 @@ threadpoolctl==2.1.0
 visidata==1.5.2
 watchgod==0.6
 matplotlib==3.2.1
+geopandas==0.7.0
