@@ -4,6 +4,10 @@ import os
 import pandas as pd
 import geopandas as gpd
 
+from hashlib import md5
+
+digest = lambda x: md5(x.encode()).hexdigest()
+
 def cache(fname,refresh=False):
     disp = {
         ".csv": (pd.read_csv,lambda x,dest: x.to_csv(dest,index=False)),
@@ -17,16 +21,22 @@ def cache(fname,refresh=False):
         def inner(*args,**kwargs):
             readfn,writefn = disp[ext]
 
-            if not os.path.exists(fname) or refresh:
-                logging.info(f"Caching {fname}")
+            path,outfile = os.path.split(fname)
+            outfile,outext = os.path.splitext(outfile)
 
-                dat = fn()
-                writefn(dat,fname)
+            ahash = digest(str(args) + str(kwargs))[:10]
+            invocationName = os.path.join(path,(outfile+"_"+ahash+outext))
+
+            if not os.path.exists(invocationName) or refresh:
+                logging.info(f"Caching {invocationName}")
+
+                dat = fn(*args,**kwargs)
+                writefn(dat,invocationName)
                 return dat
             else:
-                logging.info(f"Using cache for {fname}")
+                logging.info(f"Using cache for {invocationName}")
 
-                dat = readfn(fname)
+                dat = readfn(invocationName)
                 return dat
         return inner
     return wrapper

@@ -16,6 +16,8 @@ from matplotlib import colors
 import subprocess
 import logging
 
+import fire
+
 import os
 
 def fixDtypes(df:pd.DataFrame)->pd.DataFrame:
@@ -36,22 +38,36 @@ def ccodes() -> pd.DataFrame:
     os.unlink(fnm)
     return d.reindex() 
 @cache("cache/occurrence.csv")
-def occurrence()-> pd.DataFrame:
+def occurrence(conflictType = "either")-> pd.DataFrame:
     c = sqlite3.connect("data/pac.sqlite")
 
     pcountries = set(pd.read_sql("SELECT gwcode FROM predictions_2010_2050",c)["gwcode"].values)
     pcountries = {int(float(str(x).strip())) for x in pcountries}
 
-    occurrence = fixDtypes(pd.read_sql("SELECT year,gwcode,either_actual FROM acd",c))
+    confVars = {
+        "either": "either_actual",
+        "major": "major_actual",
+        "minor": "minor_actual"
+    }
+    confVar = confVars[conflictType]
+
+    occurrence = fixDtypes(pd.read_sql(f"SELECT year,gwcode,{confVar} FROM acd",c))
     c.close()
+    occurrence = occurrence[occurrence[confVar] != 0]
 
     span = np.arange(occurrence["year"].min(),occurrence["year"].max()+1)
-    #occurrence = occurrence[occurrence["year"].apply(lambda x: x in span)]
 
     dfs = []
     for c in pcountries:
         df = pd.DataFrame({"year":span,"gwcode":c,"occ":0})
         df.index=span
+
+        if c == 2:
+            had = 1 if confVar in ["either","minor"] else 0
+            df.at[df["year"] == 2001,"occ"] = 1
+            dfs.append(df.reindex())
+            continue
+
         if c in set(occurrence["gwcode"].values):
             occ = occurrence[occurrence["gwcode"] == c].sort_values("year")
             occ.index = occ["year"]
@@ -64,18 +80,25 @@ def occurrence()-> pd.DataFrame:
     return fixDtypes(pd.concat(dfs))
 
 @cache("cache/discrep.csv")
-def discrep()-> pd.DataFrame:
+def discrep(conflictType = "either")-> pd.DataFrame:
     c = sqlite3.connect("data/pac.sqlite")
+    
+    predVars = {
+        "either": "combined",
+        "major": "major",
+        "minor": "minor"
+    }
+    predVar = predVars[conflictType]
 
     predictions = fixDtypes(pd.read_sql("SELECT * FROM predictions_2010_2050",c))
 
-    occ = occurrence()
+    occ = occurrence(conflictType = conflictType)
     span = np.arange(occ["year"].min(),occ["year"].max()+1)
 
     predictions = predictions[predictions["year"].apply(lambda x: x in span)]
     predictions = predictions.merge(occ,on=["gwcode","year"],how="left")
 
-    predictions["discrep"] = predictions["occ"] - predictions["combined"]
+    predictions["discrep"] = predictions["occ"] - predictions[predVar]
     return predictions
 
 @cache("cache/last.csv")
@@ -99,22 +122,17 @@ def shapes()-> gpd.GeoDataFrame:
     return d
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    ds = discrep()
+def main(conflictType = "either"):
+    ds = discrep(conflictType = conflictType)
     ds = ds.merge(ccodes(),left_on="gwcode",right_on="gwn",how="left")
-    ds = ds.merge(last(),on="gwcode",how="left")
     shp = shapes()
-    
 
     # =============================================
     plt.clf()
 
     meanSum = ds[["gwcode","discrep"]].groupby("gwcode").agg("mean").reset_index()
     meanSum.to_csv("/tmp/a.csv")
-    meanSum = meanSum.merge(ds[["gwcode","lastyear"]].drop_duplicates(),on="gwcode",how="inner")
-    meanSum["classLo"] = (meanSum["lastyear"]<2000) & (meanSum["discrep"]<-0.05)
-    meanSum["classHi"] = (meanSum["discrep"]>0.5)
+    #meanSum = meanSum.merge(ds[["gwcode","lastyear"]].drop_duplicates(),on="gwcode",how="inner")
 
     meanSum.to_csv("/tmp/b.csv")
     shp = shp.merge(meanSum,left_on="GWCODE",right_on="gwcode",how="left")
@@ -126,12 +144,10 @@ if __name__ == "__main__":
         norm=norm,legend_kwds={'label': "Mean prediction discrepancy 2010-2018", 
             'orientation': "horizontal"})
 
-    plt.savefig("maps/mean.png")
+    plt.savefig(f"maps/{conflictType}_mean.png")
 
-    for v in ["classHi","classLo"]:
-        plt.clf()
-        shp.plot(column=v,figsize=(15,8))
-        plt.savefig(f"maps/{v}.png")
+    ds.to_csv("/tmp/d.csv")
 
-    # =============================================
-
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    fire.Fire(main)
