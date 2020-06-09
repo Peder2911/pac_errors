@@ -15,3 +15,7 @@ maps/*
 !maps/.gitkeep
 data/*
 !data/manifest
+
+oldcache/
+oldmaps/
+depr/
